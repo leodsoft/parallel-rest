@@ -1,0 +1,24 @@
+{
+	// Use `clippy` on-save instead of `check`
+	"rust-analyzer.checkOnSave.command": "clippy",
+	// Set toml formatter
+	"[toml]": {
+		"editor.defaultFormatter": "tamasfe.even-better-toml"
+	},
+	// Enable toml formatter reordering
+	"evenBetterToml.formatter.reorderKeys": true,
+	// format files on save
+	"editor.formatOnSave": true,
+	// Fix false-positive tokio error
+	"rust-analyzer.cargo.unsetTest": [
+		"core",
+		"tokio",
+		"tokio-macros"
+	],
+	// Fix false-positive proto import errors
+	"protoc": {
+		"options": [
+			"--proto_path=${workspaceRoot}/infra/proto",
+		]
+	},
+}
