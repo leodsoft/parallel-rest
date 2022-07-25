@@ -1,6 +1,6 @@
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
-use isahc::prelude::*;
+use reqwest::Client;
 use tokio::signal;
 use tracing::{error, info};
 
@@ -18,6 +18,7 @@ async fn run() {
     // Create a channel for the source input
     let (source_in, mut source_in_rx) = tokio::sync::mpsc::channel::<u64>(10);
 
+    // List of pending responses
     let mut wait_list = FuturesUnordered::new();
 
     // Use web service with deliberate artificial delay in response.
@@ -25,32 +26,23 @@ async fn run() {
 
     // task to receive
     tokio::spawn(async move {
+        // HTTP client
+        let client = Client::new();
+
         loop {
             tokio::select! {
                 // match on msg received
                 Some(msg) = source_in_rx.recv() => {
                     info!("Rcvd msg {} on thread {}", msg, thread_id::get());
-                    wait_list.push( isahc::get_async(uri) );
+
+                    wait_list.push( client.get(uri).send() );
                     info!("Sent request to {}", uri);
                 },
 
                 // Watch the set of futures pushed to the wait_list
-                Some(rest_resp) = wait_list.next() => {
-                     match rest_resp {
-                         Ok(mut resp) => {
-                            // extract the "origin" field (IP) from the json response
-                            let ip_response = match serde_json::from_str::<GetIpResponse>(&resp.text().await.unwrap()) {
-                                Ok(origin) => origin,
-                                Err(err) => panic!("Error: {}", err)
-                            };
-
-                            // We are not passing the calling index
-                            info!("REST response received, on thread {} = {}", thread_id::get(), ip_response.origin );
-                         }
-                         Err(err) => {
-                             error!("{}", err);
-                         }
-                     }
+                Some(_rest_resp) = wait_list.next() => {
+                    // Get the response
+                    info!("Got response from {}", uri);
                 }
             }
         }
