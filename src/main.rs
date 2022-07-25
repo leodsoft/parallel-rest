@@ -20,6 +20,9 @@ async fn run() {
 
     let mut wait_list = FuturesUnordered::new();
 
+    // Use web service with deliberate artificial delay in response.
+    let uri = "https://httpbin.org/delay/5";
+
     // task to receive
     tokio::spawn(async move {
         loop {
@@ -27,9 +30,11 @@ async fn run() {
                 // match on msg received
                 Some(msg) = source_in_rx.recv() => {
                     info!("Rcvd msg {} on thread {}", msg, thread_id::get());
-                    let response = isahc::get_async("https://httpbin.org/ip").await;
-                    wait_list.push( async move {response} );
+                    wait_list.push( isahc::get_async(uri) );
+                    info!("Sent request to {}", uri);
                 },
+
+                // Watch the set of futures pushed to the wait_list
                 Some(rest_resp) = wait_list.next() => {
                      match rest_resp {
                          Ok(mut resp) => {
@@ -40,7 +45,7 @@ async fn run() {
                             };
 
                             // We are not passing the calling index
-                            info!("REST RSP ? on thread {} = {}", thread_id::get(), ip_response.origin );
+                            info!("REST response received, on thread {} = {}", thread_id::get(), ip_response.origin );
                          }
                          Err(err) => {
                              error!("{}", err);
@@ -58,6 +63,10 @@ async fn run() {
             info!("Send msg {} on thread {}", i, thread_id::get());
             source_in.send(i).await.unwrap();
         }
+
+        signal::ctrl_c()
+            .await
+            .expect("Failed to wait for ctrl-C signal.");
     });
 
     // Wait for the shutdown signal.
