@@ -40,9 +40,16 @@ async fn run() {
                 },
 
                 // Watch the set of futures pushed to the wait_list
-                Some(_rest_resp) = wait_list.next() => {
-                    // Get the response
-                    info!("Got response from {}", uri);
+                Some(rest_resp) = wait_list.next() => {
+                    // extract the "origin" field (IP) from the json response
+                    let ip_response = rest_resp.unwrap().json::<GetIpResponse>().await;
+
+                    // send the response to the source_out channel
+                    if let Ok(origin) = ip_response.map(|r| r.origin) {
+                        info!("REST response received, on thread {} = {}", thread_id::get(), origin );
+                    } else {
+                        error!("Failed to extract IP from response");
+                    }
                 }
             }
         }
