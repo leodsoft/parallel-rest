@@ -1,8 +1,12 @@
+use futures::stream::FuturesOrdered;
 use futures::stream::FuturesUnordered;
 use futures::StreamExt;
 use reqwest::Client;
-use tokio::signal;
+use reqwest_utils::*;
+use tokio::{signal, time::sleep};
 use tracing::{error, info};
+
+mod reqwest_utils;
 
 /// REST call response for GET IP address
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -19,7 +23,8 @@ async fn run() {
     let (source_in, mut source_in_rx) = tokio::sync::mpsc::channel::<u64>(10);
 
     // List of pending responses
-    let mut wait_list = FuturesUnordered::new();
+    let mut wait_list_ordered = FuturesOrdered::new();
+    let mut wait_list_unordered = FuturesUnordered::new();
 
     // Use web service with deliberate artificial delay in response.
     let uri = "https://httpbin.org/delay/5";
@@ -32,21 +37,46 @@ async fn run() {
         loop {
             tokio::select! {
                 // match on msg received
-                Some(msg) = source_in_rx.recv() => {
-                    info!("Rcvd msg {} on thread {}", msg, thread_id::get());
+                Some(msg_id) = source_in_rx.recv() => {
+                    info!("Rcvd msg {} on thread {}", msg_id, thread_id::get());
 
-                    wait_list.push( client.get(uri).send() );
+                    // Prepare the request
+                    let req = ExchHttpFuture::new(
+                                msg_id,
+                                Box::pin(client.get(uri).send()),
+                    );
+                    wait_list_ordered.push( req );
+
+                    // Prepare the request
+                    let req_unord = ExchHttpFuture::new(
+                        msg_id,
+                        Box::pin(client.get(uri).send()),
+                    );
+                    wait_list_unordered.push( req_unord );
                     info!("Sent request to {}", uri);
                 },
 
                 // Watch the set of futures pushed to the wait_list
-                Some(rest_resp) = wait_list.next() => {
+                Some(rest_resp_ord) = wait_list_ordered.next() => {
                     // extract the "origin" field (IP) from the json response
-                    let ip_response = rest_resp.unwrap().json::<GetIpResponse>().await;
+                    let ip_response = rest_resp_ord.response_result.unwrap().json::<GetIpResponse>().await;
 
                     // send the response to the source_out channel
                     if let Ok(origin) = ip_response.map(|r| r.origin) {
-                        info!("REST response received, on thread {} = {}", thread_id::get(), origin );
+                        info!("ORD   REST msg {} received, on thread {} = {}", rest_resp_ord.request, thread_id::get(), origin );
+                    } else {
+                        error!("Failed to extract IP from response");
+                    }
+                },
+
+                // Watch the set of futures pushed to the wait_list
+                Some(rest_resp_unord) = wait_list_unordered.next() => {
+                    // extract the "origin" field (IP) from the json response
+                    let ip_response = rest_resp_unord.response_result.unwrap().json::<GetIpResponse>().await;
+
+                    // send the response to the source_out channel
+                    if let Ok(origin) = ip_response.map(|r| r.origin) {
+                        info!("UNORD REST msg {} received, on thread {} = {}", rest_resp_unord.request, thread_id::get(), origin );
                     } else {
                         error!("Failed to extract IP from response");
                     }
@@ -58,8 +88,16 @@ async fn run() {
     // task to send
     tokio::spawn(async move {
         // send 10, all within 1ms
-        for i in 0..10 {
+        for i in 0..30 {
             info!("Send msg {} on thread {}", i, thread_id::get());
+            source_in.send(i).await.unwrap();
+        }
+
+        sleep(std::time::Duration::from_secs(1)).await;
+
+        // send 10, all within 1ms
+        for i in 100..130 {
+            info!("BATCH 2: Send msg {} on thread {}", i, thread_id::get());
             source_in.send(i).await.unwrap();
         }
 
